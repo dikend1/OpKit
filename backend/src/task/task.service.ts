@@ -1,14 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
-import { TaskGateway } from './task.gateway';
+import { RedisService } from '../redis/redis.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { TaskCreatedEvent, TaskDeletedEvent, TaskUpdatedEvent } from './task-events';
 
 @Injectable()
 export class TaskService {
   constructor(
     private readonly db: DatabaseService,
-    private readonly taskGateway: TaskGateway,
+    private readonly redis: RedisService,
   ) {}
 
   findAll(userId: string) {
@@ -32,7 +33,19 @@ export class TaskService {
         description: dto.description ?? null,
       },
     });
-    this.taskGateway.emitTaskCreated(task);
+
+    const event: TaskCreatedEvent = {
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      userId: task.userId,
+      createdAt: task.createdAt.toISOString(),
+      updatedAt: task.updatedAt.toISOString(),
+      timestamp: new Date().toISOString(),
+    };
+
+    await this.redis.publish('task.created', event);
     return task;
   }
 
@@ -42,7 +55,19 @@ export class TaskService {
       where: { id },
       data: dto,
     });
-    this.taskGateway.emitTaskUpdated(task);
+
+    const event: TaskUpdatedEvent = {
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      userId: task.userId,
+      createdAt: task.createdAt.toISOString(),
+      updatedAt: task.updatedAt.toISOString(),
+      timestamp: new Date().toISOString(),
+    };
+
+    await this.redis.publish('task.updated', event);
     return task;
   }
 
@@ -53,6 +78,12 @@ export class TaskService {
       throw new NotFoundException('Task not found');
     }
 
-    this.taskGateway.emitTaskDeleted({ id, userId });
+    const event: TaskDeletedEvent = {
+      id,
+      userId,
+      timestamp: new Date().toISOString(),
+    };
+
+    await this.redis.publish('task.deleted', event);
   }
 }
