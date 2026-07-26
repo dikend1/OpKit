@@ -5,6 +5,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Generated Prisma config
+prisma.config.js
+prisma.config.d.ts
+prisma.config.js.map
+
 # Environment
 .env
 .env.local
