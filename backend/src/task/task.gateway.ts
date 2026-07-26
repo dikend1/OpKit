@@ -1,16 +1,34 @@
 import {
   WebSocketGateway, WebSocketServer, OnGatewayConnection, OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { TaskStatus } from '@prisma/client';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
+import { RedisService } from '../redis/redis.service';
+import { TaskCreatedEvent, TaskDeletedEvent, TaskUpdatedEvent } from './task-events';
 
 @WebSocketGateway({ cors: { origin: '*' } })
 export class TaskGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: Server;
 
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly redis: RedisService,
+  ) {}
+
+  async onModuleInit() {
+    await this.redis.subscribe<TaskCreatedEvent>('task.created', (event) => {
+      this.server.to(`user:${event.userId}`).emit('task.created', event);
+    });
+
+    await this.redis.subscribe<TaskUpdatedEvent>('task.updated', (event) => {
+      this.server.to(`user:${event.userId}`).emit('task.updated', event);
+    });
+
+    await this.redis.subscribe<TaskDeletedEvent>('task.deleted', (event) => {
+      this.server.to(`user:${event.userId}`).emit('task.deleted', event);
+    });
+  }
 
   handleConnection(client: Socket) {
     try {
@@ -26,38 +44,4 @@ export class TaskGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   handleDisconnect() {}
-
-  emitTaskCreated(data: { id: string; title: string; description: string | null; status: TaskStatus; userId: string; createdAt: Date; updatedAt: Date }) {
-    this.server.to(`user:${data.userId}`).emit('task.created', {
-      id: data.id,
-      title: data.title,
-      description: data.description,
-      status: data.status,
-      userId: data.userId,
-      createdAt: data.createdAt,
-      updatedAt: data.updatedAt,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  emitTaskUpdated(data: { id: string; title: string; description: string | null; status: TaskStatus; userId: string; createdAt: Date; updatedAt: Date }) {
-    this.server.to(`user:${data.userId}`).emit('task.updated', {
-      id: data.id,
-      title: data.title,
-      description: data.description,
-      status: data.status,
-      userId: data.userId,
-      createdAt: data.createdAt,
-      updatedAt: data.updatedAt,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  emitTaskDeleted(data: { id: string; userId: string }) {
-    this.server.to(`user:${data.userId}`).emit('task.deleted', {
-      id: data.id,
-      userId: data.userId,
-      timestamp: new Date().toISOString(),
-    });
-  }
 }
