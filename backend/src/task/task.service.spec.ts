@@ -1,161 +1,224 @@
+import { beforeEach, afterEach, describe, expect, it, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { TaskStatus } from './task-status.enum';
 import { TaskService } from './task.service';
-import { TaskGateway } from './task.gateway';
+import { RedisService } from '../redis/redis.service';
 import { DatabaseService } from '../database/database.service';
+
+function makeTask(overrides: Partial<{
+  id: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  userId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}> = {}) {
+  return {
+    id: 'task-1',
+    title: 'Test task',
+    description: 'Test description',
+    status: TaskStatus.TODO,
+    userId: 'user-1',
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    updatedAt: new Date('2026-01-01T00:00:00Z'),
+    ...overrides,
+  };
+}
 
 describe('TaskService', () => {
   let service: TaskService;
-  let db: DatabaseService;
-
-  const mockDb = {
-    task: {
-      findMany: jest.fn(),
-      findFirst: jest.fn(),
-      create: jest.fn(),
-      update: jest.fn(),
-      deleteMany: jest.fn(),
-    },
-  };
-
-  const mockGateway = {
-    emitTaskCreated: jest.fn(),
-    emitTaskUpdated: jest.fn(),
-    emitTaskDeleted: jest.fn(),
-  };
-
-  const userId = 'user-1';
-  const taskId = 'task-1';
-
-  const sampleTask = {
-    id: taskId,
-    title: 'Test task',
-    description: 'Test description',
-    status: 'TODO' as const,
-    userId,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
+  // Mock objects are plain JS — Prisma delegate types are too complex to mock directly
+  let db: any;
+  let redis: any;
 
   beforeEach(async () => {
+    const mockDb = {
+      task: {
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+        deleteMany: jest.fn(),
+      },
+    };
+
+    const mockRedis = {
+      publish: jest.fn(),
+      subscribe: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TaskService,
         { provide: DatabaseService, useValue: mockDb },
-        { provide: TaskGateway, useValue: mockGateway },
+        { provide: RedisService, useValue: mockRedis },
       ],
     }).compile();
 
-    service = module.get<TaskService>(TaskService);
-    db = module.get<DatabaseService>(DatabaseService);
+    service = module.get(TaskService);
+    db = mockDb;
+    redis = mockRedis;
+  });
+
+  afterEach(() => {
     jest.clearAllMocks();
   });
 
-  it('should be defined', () => {
-    expect(service).toBeDefined();
-  });
-
   describe('findAll', () => {
-    it('should return tasks for the user', async () => {
-      mockDb.task.findMany.mockResolvedValue([sampleTask]);
-      const tasks = await service.findAll(userId);
-      expect(tasks).toEqual([sampleTask]);
-      expect(mockDb.task.findMany).toHaveBeenCalledWith({
-        where: { userId },
+    it('returns tasks scoped to the given user', async () => {
+      const task = makeTask();
+      db.task.findMany.mockResolvedValue([task]);
+
+      const result = await service.findAll('user-1');
+
+      expect(result).toStrictEqual([task]);
+      expect(db.task.findMany).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
         orderBy: { createdAt: 'desc' },
       });
     });
 
-    it('should return empty array when no tasks', async () => {
-      mockDb.task.findMany.mockResolvedValue([]);
-      const tasks = await service.findAll(userId);
-      expect(tasks).toEqual([]);
+    it('returns an empty array when the user has no tasks', async () => {
+      db.task.findMany.mockResolvedValue([]);
+
+      const result = await service.findAll('user-1');
+
+      expect(result).toStrictEqual([]);
     });
   });
 
   describe('findOne', () => {
-    it('should return a task by id and userId', async () => {
-      mockDb.task.findFirst.mockResolvedValue(sampleTask);
-      const task = await service.findOne(taskId, userId);
-      expect(task).toEqual(sampleTask);
+    it('returns a task that belongs to the user', async () => {
+      const task = makeTask();
+      db.task.findFirst.mockResolvedValue(task);
+
+      const result = await service.findOne('task-1', 'user-1');
+
+      expect(result).toStrictEqual(task);
+      expect(db.task.findFirst).toHaveBeenCalledWith({
+        where: { id: 'task-1', userId: 'user-1' },
+      });
     });
 
-    it('should throw NotFoundException when task not found', async () => {
-      mockDb.task.findFirst.mockResolvedValue(null);
-      await expect(service.findOne(taskId, userId)).rejects.toThrow(NotFoundException);
+    it('throws NotFoundException when the task does not exist', async () => {
+      db.task.findFirst.mockResolvedValue(null);
+
+      await expect(service.findOne('task-1', 'user-1')).rejects.toThrow(
+        new NotFoundException('Task not found'),
+      );
     });
 
-    it('should not return a task belonging to another user', async () => {
-      mockDb.task.findFirst.mockResolvedValue(null);
-      await expect(service.findOne(taskId, 'other-user')).rejects.toThrow(NotFoundException);
+    it('throws NotFoundException when the task belongs to another user', async () => {
+      db.task.findFirst.mockResolvedValue(null);
+
+      await expect(service.findOne('task-1', 'other-user')).rejects.toThrow(
+        new NotFoundException('Task not found'),
+      );
     });
   });
 
   describe('create', () => {
-    it('should create a task and emit WS event', async () => {
+    it('creates a task with title and description and emits a WS event', async () => {
       const dto = { title: 'New task', description: 'New desc' };
-      mockDb.task.create.mockResolvedValue({ ...sampleTask, title: 'New task', description: 'New desc' });
+      const created = makeTask({ title: 'New task', description: 'New desc' });
+      db.task.create.mockResolvedValue(created);
 
-      const result = await service.create(userId, dto);
-      expect(result.title).toBe('New task');
-      expect(mockDb.task.create).toHaveBeenCalledWith({
-        data: { userId, title: 'New task', description: 'New desc' },
+      const result = await service.create('user-1', dto);
+
+      expect(result).toStrictEqual(created);
+      expect(db.task.create).toHaveBeenCalledWith({
+        data: { userId: 'user-1', title: 'New task', description: 'New desc' },
       });
-      expect(mockGateway.emitTaskCreated).toHaveBeenCalled();
+      expect(redis.publish).toHaveBeenCalledWith('task.created', {
+        id: 'task-1',
+        title: 'New task',
+        description: 'New desc',
+        status: TaskStatus.TODO,
+        userId: 'user-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        timestamp: expect.any(String),
+      });
     });
 
-    it('should create task without description', async () => {
-      const dto = { title: 'Minimal task', description: undefined };
-      mockDb.task.create.mockResolvedValue({ ...sampleTask, title: 'Minimal task', description: null });
+    it('stores null description when none is provided', async () => {
+      const dto = { title: 'Minimal' };
+      const created = makeTask({ title: 'Minimal', description: null });
+      db.task.create.mockResolvedValue(created);
 
-      const result = await service.create(userId, dto);
-      expect(result.title).toBe('Minimal task');
-      expect(mockDb.task.create).toHaveBeenCalledWith({
-        data: { userId, title: 'Minimal task', description: null },
+      const result = await service.create('user-1', dto);
+
+      expect(result.description).toBeNull();
+      expect(db.task.create).toHaveBeenCalledWith({
+        data: { userId: 'user-1', title: 'Minimal', description: null },
       });
     });
   });
 
   describe('update', () => {
-    it('should update task title and emit WS event', async () => {
-      mockDb.task.findFirst.mockResolvedValue(sampleTask);
-      const updated = { ...sampleTask, title: 'Updated title' };
-      mockDb.task.update.mockResolvedValue(updated);
+    it('updates the title and emits a WS event', async () => {
+      db.task.findFirst.mockResolvedValue(makeTask());
+      const updated = makeTask({ title: 'Updated' });
+      db.task.update.mockResolvedValue(updated);
 
-      const result = await service.update(taskId, userId, { title: 'Updated title' });
-      expect(result.title).toBe('Updated title');
-      expect(mockGateway.emitTaskUpdated).toHaveBeenCalledWith(updated);
+      const result = await service.update('task-1', 'user-1', { title: 'Updated' });
+
+      expect(result).toStrictEqual(updated);
+      expect(redis.publish).toHaveBeenCalledWith('task.updated', {
+        id: 'task-1',
+        title: 'Updated',
+        description: 'Test description',
+        status: TaskStatus.TODO,
+        userId: 'user-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        timestamp: expect.any(String),
+      });
     });
 
-    it('should update task status', async () => {
-      mockDb.task.findFirst.mockResolvedValue(sampleTask);
-      const updated = { ...sampleTask, status: 'DONE' as const };
-      mockDb.task.update.mockResolvedValue(updated);
+    it('updates the status', async () => {
+      db.task.findFirst.mockResolvedValue(makeTask());
+      const updated = makeTask({ status: TaskStatus.DONE });
+      db.task.update.mockResolvedValue(updated);
 
-      const result = await service.update(taskId, userId, { status: TaskStatus.DONE });
-      expect(result.status).toBe('DONE');
+      const result = await service.update('task-1', 'user-1', { status: TaskStatus.DONE });
+
+      expect(result.status).toBe(TaskStatus.DONE);
     });
 
-    it('should throw when task not found', async () => {
-      mockDb.task.findFirst.mockResolvedValue(null);
-      await expect(service.update(taskId, userId, { title: 'New' })).rejects.toThrow(NotFoundException);
+    it('throws NotFoundException when the task does not exist', async () => {
+      db.task.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.update('task-1', 'user-1', { title: 'New' }),
+      ).rejects.toThrow(new NotFoundException('Task not found'));
     });
   });
 
   describe('remove', () => {
-    it('should delete task and emit WS event', async () => {
-      mockDb.task.deleteMany.mockResolvedValue({ count: 1 });
-      await service.remove(taskId, userId);
-      expect(mockDb.task.deleteMany).toHaveBeenCalledWith({
-        where: { id: taskId, userId },
+    it('deletes the task and emits a WS event', async () => {
+      db.task.deleteMany.mockResolvedValue({ count: 1 });
+
+      await service.remove('task-1', 'user-1');
+
+      expect(db.task.deleteMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', userId: 'user-1' },
       });
-      expect(mockGateway.emitTaskDeleted).toHaveBeenCalledWith({ id: taskId, userId });
+      expect(redis.publish).toHaveBeenCalledWith('task.deleted', {
+        id: 'task-1',
+        userId: 'user-1',
+        timestamp: expect.any(String),
+      });
     });
 
-    it('should throw NotFoundException when task not found', async () => {
-      mockDb.task.deleteMany.mockResolvedValue({ count: 0 });
-      await expect(service.remove(taskId, userId)).rejects.toThrow(NotFoundException);
+    it('throws NotFoundException when the task does not exist', async () => {
+      db.task.deleteMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.remove('task-1', 'user-1')).rejects.toThrow(
+        new NotFoundException('Task not found'),
+      );
     });
   });
 });
