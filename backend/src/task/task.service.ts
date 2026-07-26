@@ -47,11 +47,12 @@ export class TaskService {
   }
 
   async remove(id: string, userId: string) {
-    try {
-      await this.db.task.delete({ where: { id } });
-    } catch {
+    const result = await this.db.task.deleteMany({ where: { id, userId } });
+
+    if (result.count === 0) {
       throw new NotFoundException('Task not found');
     }
+
     this.taskGateway.emitTaskDeleted({ id, userId });
   }
 }

@@ -1,6 +1,7 @@
 import {
   WebSocketGateway, WebSocketServer, OnGatewayConnection, OnGatewayDisconnect,
 } from '@nestjs/websockets';
+import { TaskStatus } from '@prisma/client';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 
@@ -18,6 +19,7 @@ export class TaskGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       const payload = this.jwtService.verify(token as string);
       client.data.userId = payload.sub;
+      client.join(`user:${payload.sub}`);
     } catch {
       client.disconnect();
     }
@@ -25,10 +27,11 @@ export class TaskGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect() {}
 
-  emitTaskCreated(data: { id: string; title: string; status: string; userId: string; createdAt: Date; updatedAt: Date }) {
-    this.server.emit('task.created', {
+  emitTaskCreated(data: { id: string; title: string; description: string | null; status: TaskStatus; userId: string; createdAt: Date; updatedAt: Date }) {
+    this.server.to(`user:${data.userId}`).emit('task.created', {
       id: data.id,
       title: data.title,
+      description: data.description,
       status: data.status,
       userId: data.userId,
       createdAt: data.createdAt,
@@ -37,10 +40,11 @@ export class TaskGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  emitTaskUpdated(data: { id: string; title: string; status: string; userId: string; createdAt: Date; updatedAt: Date }) {
-    this.server.emit('task.updated', {
+  emitTaskUpdated(data: { id: string; title: string; description: string | null; status: TaskStatus; userId: string; createdAt: Date; updatedAt: Date }) {
+    this.server.to(`user:${data.userId}`).emit('task.updated', {
       id: data.id,
       title: data.title,
+      description: data.description,
       status: data.status,
       userId: data.userId,
       createdAt: data.createdAt,
@@ -50,7 +54,7 @@ export class TaskGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   emitTaskDeleted(data: { id: string; userId: string }) {
-    this.server.emit('task.deleted', {
+    this.server.to(`user:${data.userId}`).emit('task.deleted', {
       id: data.id,
       userId: data.userId,
       timestamp: new Date().toISOString(),
