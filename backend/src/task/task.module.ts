@@ -1,12 +1,16 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { Task } from './task.entity';
+import { JwtModule } from '@nestjs/jwt';
 import { TaskService } from './task.service';
 import { TaskController } from './task.controller';
+import { TaskGateway } from './task.gateway';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Task])],
+  imports: [
+    JwtModule.register({
+      secret: process.env.JWT_SECRET || 'opkit-dev-secret',
+    }),
+  ],
   controllers: [TaskController],
-  providers: [TaskService],
+  providers: [TaskService, TaskGateway],
 })
 export class TaskModule {}
