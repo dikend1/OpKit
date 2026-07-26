@@ -11,11 +11,11 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "baseUrl": "./",
-    "ignoreDeprecations": "6.0",
     "skipLibCheck": true,
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true
-  }
+  },
+  "exclude": ["node_modules", "dist", "prisma.config.ts", "prisma"]
 }
