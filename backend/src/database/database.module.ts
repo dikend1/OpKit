@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../user/user.entity';
+import { Task } from '../task/task.entity';
 
 @Module({
   imports: [
@@ -11,7 +12,7 @@ import { User } from '../user/user.entity';
       username: process.env.DB_USERNAME || 'postgres',
       password: process.env.DB_PASSWORD || 'postgres',
       database: process.env.DB_NAME || 'opkit',
-      entities: [User],
+      entities: [User, Task],
       synchronize: true,
     }),
   ],
