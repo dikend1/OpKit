@@ -10,7 +10,7 @@
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": "./",
+    "types": ["node", "jest"],
     "skipLibCheck": true,
     "strict": true,
     "forceConsistentCasingInFileNames": true,
